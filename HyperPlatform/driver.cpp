@@ -78,7 +78,7 @@ _Use_decl_annotations_ NTSTATUS DriverEntry(PDRIVER_OBJECT driver_object,
 
   // Initialize log functions
   bool need_reinitialization = false;
-  status = LogInitialization(kLogLevel, kLogFilePath);
+  status = LogInitialization(kLogLevel, kLogFilePath, kLogSerialPortCom2);
   if (status == STATUS_REINITIALIZATION_NEEDED) {
     need_reinitialization = true;
   } else if (!NT_SUCCESS(status)) {

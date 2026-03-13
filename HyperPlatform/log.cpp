@@ -49,6 +49,20 @@ static const auto kLogpLogFlushIntervalMsec = 50;
 
 static const ULONG kLogpPoolTag = ' gol';
 
+// COM register offsets
+#define SERIAL_REG_DATA 0x00
+#define SERIAL_REG_INT_ENABLE 0x01
+#define SERIAL_REG_FIFO 0x02
+#define SERIAL_REG_LINE_CTRL 0x03
+#define SERIAL_REG_MODEM_CTRL 0x04
+#define SERIAL_REG_LINE_STATUS 0x05
+
+// Baud divisor: 1 = 115200 baud
+#define SERIAL_BAUD_DIVISOR 1
+
+static ULONG g_logp_serial_port = 0;
+static bool g_logp_serial_initialized = false;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // types
@@ -138,6 +152,9 @@ static bool LogpIsPrinted(_In_z_ char *message);
 
 static void LogpDbgBreak();
 
+static void LogpSerialWriteChar(_In_ char c);
+static void LogpSerialWriteString(_In_z_ const char *s);
+
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, LogInitialization)
 #pragma alloc_text(INIT, LogpInitializeBufferInfo)
@@ -161,14 +178,63 @@ static LogBufferInfo g_logp_log_buffer_info = {};
 
 ////////////////////////////////////////////////////////////////////////////////
 //
+// serial helpers
+//
+
+// Busy-waits for the TX FIFO to have room, then writes one byte.
+// Safe at any IRQL — pure port I/O, no memory allocation.
+static void LogpSerialWriteChar(char c) {
+  while (
+      (READ_PORT_UCHAR((PUCHAR)(g_logp_serial_port + SERIAL_REG_LINE_STATUS)) &
+       0x20) == 0);
+  WRITE_PORT_UCHAR((PUCHAR)(g_logp_serial_port + SERIAL_REG_DATA), (UCHAR)c);
+}
+
+// Writes a null-terminated string to the serial port.
+// Bare '\n' is normalized to '\r\n' so terminals display correctly.
+static void LogpSerialWriteString(const char *s) {
+  if (!g_logp_serial_initialized) return;
+  while (*s) {
+    if (*s == '\n' && (s == (const char *)1 || *(s - 1) != '\r'))
+      LogpSerialWriteChar('\r');
+    LogpSerialWriteChar(*s++);
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//
 // implementations
 //
 
-_Use_decl_annotations_ NTSTATUS
-LogInitialization(ULONG flag, const wchar_t *log_file_path) {
+// serial_port: I/O base address of the UART to use, e.g. 0x3F8 (COM1) or
+//              0x2F8 (COM2). Pass 0 to disable serial output.
+_Use_decl_annotations_ NTSTATUS LogInitialization(ULONG flag,
+                                                  const wchar_t *log_file_path,
+                                                  ULONG serial_port) {
   PAGED_CODE()
 
   auto status = STATUS_SUCCESS;
+
+  // Initialize the UART before any log call so the earliest messages are
+  // visible on the serial terminal.
+  if (serial_port != 0) {
+    g_logp_serial_port = serial_port;
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_INT_ENABLE),
+                     0x00);  // Disable interrupts
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_LINE_CTRL),
+                     0x80);  // Enable DLAB
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_DATA),
+                     SERIAL_BAUD_DIVISOR);  // Divisor low  (115200)
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_INT_ENABLE),
+                     0x00);  // Divisor high (115200)
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_LINE_CTRL),
+                     0x03);  // 8N1, DLAB off
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_FIFO),
+                     0xC7);  // Enable FIFO, clear TX/RX
+    WRITE_PORT_UCHAR((PUCHAR)(serial_port + SERIAL_REG_MODEM_CTRL),
+                     0x0B);  // RTS/DSR set
+    g_logp_serial_initialized = true;
+  }
 
   g_logp_debug_flag = flag;
 
@@ -441,6 +507,9 @@ _Use_decl_annotations_ NTSTATUS LogpPrint(ULONG level,
     LogpDbgBreak();
     return status;
   }
+
+  // Write to serial first — safe at any IRQL.
+  LogpSerialWriteString(message);
 
   status = LogpPut(message, attribute);
   if (!NT_SUCCESS(status)) {

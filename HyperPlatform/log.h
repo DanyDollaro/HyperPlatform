@@ -115,6 +115,16 @@ static const auto kLogOptDisableProcessorNumber = 0x400ul;
 /// For LogInitialization(). Do not log to debug buffer
 static const auto kLogOptDisableDbgPrint = 0x800ul;
 
+/// For LogInitialization(). Disables serial output (pass as serial_port)
+static const auto kLogSerialPortDisable = 0x0ul;
+
+/// Standard I/O base addresses for COM ports.
+/// Pass one of these as the serial_port argument to LogInitialization().
+static const auto kLogSerialPortCom1 = 0x3F8ul;  //!< COM1
+static const auto kLogSerialPortCom2 = 0x2F8ul;  //!< COM2
+static const auto kLogSerialPortCom3 = 0x3E8ul;  //!< COM3
+static const auto kLogSerialPortCom4 = 0x2E8ul;  //!< COM4
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // types
@@ -126,8 +136,12 @@ static const auto kLogOptDisableDbgPrint = 0x800ul;
 //
 
 /// Initializes the log system.
-/// @param flag   A OR-ed flag to control a log level and options
-/// @param file_path  A log file path
+/// @param flag         A OR-ed flag to control a log level and options
+/// @param file_path    A log file path (optional, pass nullptr to skip)
+/// @param serial_port  I/O base address of the UART to use for serial output.
+///                     Use one of the kLogSerialPortCOMx constants, or pass
+///                     kLogSerialPortDisable (0) to disable serial output.
+///                     The port is programmed to 115200 8N1 during init.
 /// @return STATUS_SUCCESS on success, STATUS_REINITIALIZATION_NEEDED when
 /// re-initialization with LogRegisterReinitialization() is required, or else on
 /// failure.
@@ -141,7 +155,8 @@ static const auto kLogOptDisableDbgPrint = 0x800ul;
 /// \a flag is a OR-ed value of kLogPutLevel* and kLogOpt*. For example,
 /// kLogPutLevelDebug | kLogOptDisableFunctionName.
 _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS
-    LogInitialization(_In_ ULONG flag, _In_opt_ const wchar_t *file_path);
+    LogInitialization(_In_ ULONG flag, _In_opt_ const wchar_t *file_path,
+                      _In_ ULONG serial_port);
 
 /// Registers re-initialization.
 /// @param driver_object  A driver object being loaded
@@ -160,9 +175,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL) void LogIrpShutdownHandler();
 _IRQL_requires_max_(PASSIVE_LEVEL) void LogTermination();
 
 /// Logs a message; use HYPERPLATFORM_LOG_*() macros instead.
-/// @param level   Severity of a message
-/// @param function_name   A name of a function called this function
-/// @param format   A format string
+/// @param level         Severity of a message
+/// @param function_name A name of a function called this function
+/// @param format        A format string
 /// @return STATUS_SUCCESS on success
 /// @see HYPERPLATFORM_LOG_DEBUG
 /// @see HYPERPLATFORM_LOG_DEBUG_SAFE
