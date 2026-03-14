@@ -362,6 +362,7 @@ _Use_decl_annotations_ static void VmpInitializeVm(
 
   const auto shared_data = static_cast<SharedProcessorData *>(context);
   if (!shared_data) {
+    HYPERPLATFORM_LOG_DEBUG("shared_data was null");
     return;
   }
 
@@ -369,6 +370,7 @@ _Use_decl_annotations_ static void VmpInitializeVm(
   const auto processor_data = static_cast<ProcessorData *>(ExAllocatePoolZero(
       NonPagedPool, sizeof(ProcessorData), kHyperPlatformCommonPoolTag));
   if (!processor_data) {
+    HYPERPLATFORM_LOG_DEBUG("failed to allocate processor_data");
     return;
   }
   RtlZeroMemory(processor_data, sizeof(ProcessorData));
@@ -376,16 +378,19 @@ _Use_decl_annotations_ static void VmpInitializeVm(
   InterlockedIncrement(&processor_data->shared_data->reference_count);
 
   // Set up EPT
+  /*
   processor_data->ept_data = EptInitialization();
   if (!processor_data->ept_data) {
+    HYPERPLATFORM_LOG_DEBUG("failed to initialize ept");
     VmpFreeProcessorData(processor_data);
     return;
-  }
+  } */
 
   // Allocate other processor data fields
   processor_data->vmm_stack_limit =
       UtilAllocateContiguousMemory(KERNEL_STACK_SIZE);
   if (!processor_data->vmm_stack_limit) {
+    HYPERPLATFORM_LOG_DEBUG("failed to allocate vmm stack");
     VmpFreeProcessorData(processor_data);
     return;
   }
@@ -395,6 +400,7 @@ _Use_decl_annotations_ static void VmpInitializeVm(
       static_cast<VmControlStructure *>(ExAllocatePoolZero(
           NonPagedPool, kVmxMaxVmcsSize, kHyperPlatformCommonPoolTag));
   if (!processor_data->vmcs_region) {
+    HYPERPLATFORM_LOG_DEBUG("vmcs allocation failed");
     VmpFreeProcessorData(processor_data);
     return;
   }
@@ -404,6 +410,7 @@ _Use_decl_annotations_ static void VmpInitializeVm(
       static_cast<VmControlStructure *>(ExAllocatePoolZero(
           NonPagedPool, kVmxMaxVmcsSize, kHyperPlatformCommonPoolTag));
   if (!processor_data->vmxon_region) {
+    HYPERPLATFORM_LOG_DEBUG("vmxon region failed allocation");
     VmpFreeProcessorData(processor_data);
     return;
   }
@@ -486,16 +493,21 @@ _Use_decl_annotations_ static void VmpInitializeVm(
 
   // Set up VMCS
   if (!VmpEnterVmxMode(processor_data)) {
+    HYPERPLATFORM_LOG_DEBUG("enter vmx mode failed");
     VmpFreeProcessorData(processor_data);
     return;
   }
   if (!VmpInitializeVmcs(processor_data)) {
+    HYPERPLATFORM_LOG_DEBUG("initialize vmcs failed");
     goto Exit;
   }
   if (!VmpSetupVmcs(processor_data, guest_stack_pointer,
                     guest_instruction_pointer, vmm_stack_base)) {
+    HYPERPLATFORM_LOG_DEBUG("vmcs setup failed");
     goto Exit;
   }
+
+  HYPERPLATFORM_LOG_DEBUG("Before vm launch");
 
   // Do virtualize the processor
   VmpLaunchVm();
@@ -718,7 +730,7 @@ _Use_decl_annotations_ static bool VmpSetupVmcs(
   error |= UtilVmWrite64(VmcsField::kIoBitmapA, UtilPaFromVa(processor_data->shared_data->io_bitmap_a));
   error |= UtilVmWrite64(VmcsField::kIoBitmapB, UtilPaFromVa(processor_data->shared_data->io_bitmap_b));
   error |= UtilVmWrite64(VmcsField::kMsrBitmap, UtilPaFromVa(processor_data->shared_data->msr_bitmap));
-  error |= UtilVmWrite64(VmcsField::kEptPointer, EptGetEptPointer(processor_data->ept_data));
+  // error |= UtilVmWrite64(VmcsField::kEptPointer, EptGetEptPointer(processor_data->ept_data));
 
   /* 64-Bit Guest-State Fields */
   error |= UtilVmWrite64(VmcsField::kVmcsLinkPointer, MAXULONG64);
