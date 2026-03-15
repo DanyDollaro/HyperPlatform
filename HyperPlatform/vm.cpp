@@ -645,10 +645,10 @@ _Use_decl_annotations_ static bool VmpSetupVmcs(
                             vm_procctl_requested.all)};
 
   VmxSecondaryProcessorBasedControls vm_procctl2_requested = {};
-  vm_procctl2_requested.fields.enable_ept = true;
+  vm_procctl2_requested.fields.enable_ept = false;
   vm_procctl2_requested.fields.descriptor_table_exiting = true;
   vm_procctl2_requested.fields.enable_rdtscp = true;  // for Win10
-  vm_procctl2_requested.fields.enable_vpid = true;
+  vm_procctl2_requested.fields.enable_vpid = false;
   vm_procctl2_requested.fields.enable_invpcid = true;        // for Win10
   vm_procctl2_requested.fields.enable_xsaves_xstors = true;  // for Win10
   VmxSecondaryProcessorBasedControls vm_procctl2 = {VmpAdjustControlValue(
@@ -704,7 +704,7 @@ _Use_decl_annotations_ static bool VmpSetupVmcs(
   auto error = VmxStatus::kOk;
 
   /* 16-Bit Control Field */
-  error |= UtilVmWrite(VmcsField::kVirtualProcessorId, KeGetCurrentProcessorNumberEx(nullptr) + 1);
+  // error |= UtilVmWrite(VmcsField::kVirtualProcessorId, KeGetCurrentProcessorNumberEx(nullptr) + 1);
 
   /* 16-Bit Guest-State Fields */
   error |= UtilVmWrite(VmcsField::kGuestEsSelector, AsmReadES());
