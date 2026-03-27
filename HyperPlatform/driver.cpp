@@ -14,6 +14,9 @@
 #include "util.h"
 #include "vm.h"
 #include "performance.h"
+#include "system_gates.h"
+#include "syscall_table.h"
+#include "process_tracer.h"
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -40,12 +43,12 @@ DRIVER_INITIALIZE DriverEntry;
 
 static DRIVER_UNLOAD DriverpDriverUnload;
 
-_IRQL_requires_max_(PASSIVE_LEVEL) bool DriverpIsSuppoetedOS();
+_IRQL_requires_max_(PASSIVE_LEVEL) bool DriverpIsSupportedOS();
 
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, DriverEntry)
 #pragma alloc_text(PAGE, DriverpDriverUnload)
-#pragma alloc_text(INIT, DriverpIsSuppoetedOS)
+#pragma alloc_text(INIT, DriverpIsSupportedOS)
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -71,7 +74,6 @@ _Use_decl_annotations_ NTSTATUS DriverEntry(PDRIVER_OBJECT driver_object,
 
   auto status = STATUS_UNSUCCESSFUL;
   driver_object->DriverUnload = DriverpDriverUnload;
-  HYPERPLATFORM_COMMON_DBG_BREAK();
 
   // Request NX Non-Paged Pool when available
   ExInitializeDriverRuntime(DrvRtPoolNxOptIn);
@@ -86,7 +88,7 @@ _Use_decl_annotations_ NTSTATUS DriverEntry(PDRIVER_OBJECT driver_object,
   }
 
   // Test if the system is supported
-  if (!DriverpIsSuppoetedOS()) {
+  if (!DriverpIsSupportedOS()) {
     LogTermination();
     return STATUS_CANCELLED;
   }
@@ -135,6 +137,31 @@ _Use_decl_annotations_ NTSTATUS DriverEntry(PDRIVER_OBJECT driver_object,
     LogTermination();
     return status;
   }
+  status = ProcessTracerInitialize();
+  if (!NT_SUCCESS(status))
+  {
+    HotplugCallbackTermination();
+    PowerCallbackTermination();
+    UtilTermination();
+    PerfTermination();
+    GlobalObjectTermination();
+    LogTermination();
+    return status;
+  }
+
+  status = SyscallTableInitialize();
+  if (!NT_SUCCESS(status)) {
+    HotplugCallbackTermination();
+    PowerCallbackTermination();
+    UtilTermination();
+    PerfTermination();
+    GlobalObjectTermination();
+    ProcessTracerDestroy();
+    LogTermination();
+    return status;
+  }
+
+  SystemGatesInitialize();
 
   // Virtualize all processors
   status = VmInitialization();
@@ -144,6 +171,7 @@ _Use_decl_annotations_ NTSTATUS DriverEntry(PDRIVER_OBJECT driver_object,
     UtilTermination();
     PerfTermination();
     GlobalObjectTermination();
+    ProcessTracerDestroy();
     LogTermination();
     return status;
   }
@@ -166,6 +194,7 @@ _Use_decl_annotations_ static void DriverpDriverUnload(
   HYPERPLATFORM_COMMON_DBG_BREAK();
 
   VmTermination();
+  ProcessTracerDestroy();
   HotplugCallbackTermination();
   PowerCallbackTermination();
   UtilTermination();
@@ -175,7 +204,7 @@ _Use_decl_annotations_ static void DriverpDriverUnload(
 }
 
 // Test if the system is one of supported OS versions
-_Use_decl_annotations_ bool DriverpIsSuppoetedOS() {
+_Use_decl_annotations_ bool DriverpIsSupportedOS() {
   PAGED_CODE()
 
   RTL_OSVERSIONINFOW os_version = {};

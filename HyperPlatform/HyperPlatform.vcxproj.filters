@@ -52,6 +52,18 @@
     <ClCompile Include="hotplug_callback.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="system_gates.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Zydis.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="syscall_table.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="process_tracer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="asm.h">
@@ -97,6 +109,21 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="power_callback.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="system_gates.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Zydis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="syscall_table.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="process_tracer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ntdefs.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

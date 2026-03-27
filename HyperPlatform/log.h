@@ -16,6 +16,16 @@ extern "C" {
 // macro utilities
 //
 
+/// Define HYPERPLATFORM_LOG_DISABLE (e.g. in your project preprocessor
+/// definitions) to compile out every HYPERPLATFORM_LOG_* call entirely.
+/// When defined, all log macros expand to a ((NTSTATUS)STATUS_SUCCESS) cast
+/// expression so that callers that check the return value still compile
+/// cleanly and the compiler generates no code whatsoever.
+///
+/// Example – add to your sources / project properties:
+///   C_DEFINES = $(C_DEFINES) -DHYPERPLATFORM_LOG_DISABLE
+#ifndef HYPERPLATFORM_LOG_DISABLE
+
 /// Logs a message as respective severity
 /// @param format   A format string
 /// @return STATUS_SUCCESS on success
@@ -72,6 +82,23 @@ extern "C" {
 #define HYPERPLATFORM_LOG_ERROR_SAFE(format, ...)                        \
   LogpPrint(kLogpLevelError | kLogpLevelOptSafe, __FUNCTION__, (format), \
             __VA_ARGS__)
+
+#else  // HYPERPLATFORM_LOG_DISABLE
+
+// All log macros are compiled away to a no-op.
+// (void)(format, __VA_ARGS__) references every argument through the comma
+// operator so the compiler does not emit unused-variable warnings, while
+// generating no code.
+#define HYPERPLATFORM_LOG_DEBUG(format, ...)      ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_INFO(format, ...)       ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_WARN(format, ...)       ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_ERROR(format, ...)      ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_DEBUG_SAFE(format, ...) ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_INFO_SAFE(format, ...)  ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_WARN_SAFE(format, ...)  ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+#define HYPERPLATFORM_LOG_ERROR_SAFE(format, ...) ((void)(format, __VA_ARGS__), (NTSTATUS)STATUS_SUCCESS)
+
+#endif  // HYPERPLATFORM_LOG_DISABLE
 
 ////////////////////////////////////////////////////////////////////////////////
 //

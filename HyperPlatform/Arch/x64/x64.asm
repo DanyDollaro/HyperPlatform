@@ -13,6 +13,7 @@
 EXTERN VmmVmExitHandler : PROC
 EXTERN VmmVmxFailureHandler : PROC
 EXTERN UtilDumpGpRegisters : PROC
+EXTERN SyscallGate : PROC
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
@@ -25,6 +26,7 @@ VMX_ERROR_WITH_STATUS       EQU     1
 VMX_ERROR_WITHOUT_STATUS    EQU     2
 KTRAP_FRAME_SIZE            EQU     190h
 MACHINE_FRAME_SIZE          EQU     28h
+MSR_LSTAR                   EQU     0C0000082h
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
@@ -87,12 +89,80 @@ ASM_DUMP_REGISTERS MACRO
     popfq
 ENDM
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; globals
+;
+.DATA
+    OriginalSyscallHandlerAddress  QWORD 0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
 ; implementations
 ;
 .CODE
+
+; void AsmSystemGateEntryInitialize()
+AsmSystemGateEntryInitialize PROC
+    mov     ecx, MSR_LSTAR
+    rdmsr
+    shl     rdx, 32
+    or      rax, rdx
+    mov     OriginalSyscallHandlerAddress, rax
+    ret
+AsmSystemGateEntryInitialize ENDP
+
+AsmSyscallGateEntry PROC
+    swapgs
+
+    ; Swap the user and the kernel mode stacks
+    mov     gs:[010h], rsp
+    mov     rsp, gs:[01A8h]
+
+    ; Create a machine frame into the stack
+    push    2Bh
+    push    qword ptr gs:[10h]
+    push    r11
+    push    33h
+    push    rcx
+
+    PUSHAQ
+    sti
+    stac
+
+    ; rcx contains the guest return address
+    lea     rdx, [rsp + 080h] ; MachineFrame*
+    lea     r8,  [rsp]        ; GpRegisters*
+    sub     rsp, 20h          ; spill space
+    call    SyscallGate
+    add     rsp, 20h
+
+    clac
+    cli
+
+    ; Check if we have to forward the call to the original handler
+    test rax, rax
+    jnz forward_syscall
+
+    POPAQ
+    mov     rcx, [rsp + 000h]   ; RIP      -> RCX
+    mov     r11, [rsp + 010h]   ; RFLAGS   -> R11
+    mov     rsp, [rsp + 018h]   ; user RSP -> RSP
+
+    swapgs
+    sysret
+
+forward_syscall:
+    ; TODO: it would be better to do not duplicate this code
+
+    POPAQ
+    mov     rcx, [rsp + 000h]   ; RIP      -> RCX
+    mov     r11, [rsp + 010h]   ; RFLAGS   -> R11
+    mov     rsp, [rsp + 018h]   ; user RSP -> RSP
+
+    swapgs
+    jmp OriginalSyscallHandlerAddress
+AsmSyscallGateEntry ENDP
 
 ; bool __stdcall AsmInitializeVm(
 ;     _In_ void (*vm_initialization_routine)(_In_ ULONG_PTR, _In_ ULONG_PTR,

@@ -33,10 +33,13 @@ struct SharedProcessorData {
   void* io_bitmap_b;              //!< Bitmap to activate IO VM-exit (~ 0xffff)
 };
 
+constexpr ULONG64 kUdExceptionStackSize = 0x1000 * 8;
+
 /// Represents VMM related data associated with each processor
 struct ProcessorData {
   SharedProcessorData* shared_data;         //!< Shared data
   void* vmm_stack_limit;                    //!< A head of VA for VMM stack
+  void* vmm_ud_exception_stack_limit;
   struct VmControlStructure* vmxon_region;  //!< VA of a VMXON region
   struct VmControlStructure* vmcs_region;   //!< VA of a VMCS region
   struct EptData* ept_data;                 //!< A pointer to EPT related data

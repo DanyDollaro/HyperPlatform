@@ -13,6 +13,8 @@
 #include "log.h"
 #include "util.h"
 #include "performance.h"
+#include "system_gates.h"
+#include "process_tracer.h"
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -182,20 +184,20 @@ static VmExitHistory g_vmmp_vm_exit_history[kVmmpNumberOfProcessors]
 #pragma warning(push)
 #pragma warning(disable : 28167)
 _Use_decl_annotations_ bool __stdcall VmmVmExitHandler(VmmInitialStack *stack) {
-  // Save guest's context and raise IRQL as quick as possible
+  // Remember in this context we are executing with IF flag cleared
+
   const auto guest_irql = KeGetCurrentIrql();
   const auto guest_cr8 = IsX64() ? __readcr8() : 0;
-  if (guest_irql < DISPATCH_LEVEL) {
-    KeRaiseIrqlToDpcLevel();
-  }
 
   // Capture the current guest state
-  GuestContext guest_context = {stack,
-                                UtilVmRead(VmcsField::kGuestRflags),
-                                UtilVmRead(VmcsField::kGuestRip),
-                                guest_cr8,
-                                guest_irql,
-                                true};
+  GuestContext guest_context = {
+    stack,
+    UtilVmRead(VmcsField::kGuestRflags),
+    UtilVmRead(VmcsField::kGuestRip),
+    guest_cr8,
+    guest_irql,
+    true
+  };
   guest_context.gp_regs->sp = UtilVmRead(VmcsField::kGuestRsp);
 
   // Update the trap frame so that Windbg can construct the stack trace of the
@@ -216,15 +218,6 @@ _Use_decl_annotations_ bool __stdcall VmmVmExitHandler(VmmInitialStack *stack) {
     UtilInvvpidAllContext();
   }
 
-  // Restore guest's context
-  if (guest_context.irql < DISPATCH_LEVEL) {
-    KeLowerIrql(guest_context.irql);
-  }
-
-  // Apply possibly updated CR8 by the handler
-  if (IsX64()) {
-    __writecr8(guest_context.cr8);
-  }
   return guest_context.vm_continue;
 }
 #pragma warning(pop)
@@ -358,6 +351,388 @@ _Use_decl_annotations_ static void VmmpHandleMonitorTrap(
                                  guest_context->ip, 0);
 }
 
+const char* VmExitReasonToString(VmxExitReason Reason)
+{
+    switch (Reason)
+    {
+    case VmxExitReason::kExceptionOrNmi:        return "ExceptionOrNmi";
+    case VmxExitReason::kExternalInterrupt:     return "ExternalInterrupt";
+    case VmxExitReason::kTripleFault:           return "TripleFault";
+    case VmxExitReason::kInit:                  return "Init";
+    case VmxExitReason::kSipi:                  return "Sipi";
+    case VmxExitReason::kIoSmi:                 return "IoSmi";
+    case VmxExitReason::kOtherSmi:              return "OtherSmi";
+    case VmxExitReason::kPendingInterrupt:      return "PendingInterrupt";
+    case VmxExitReason::kNmiWindow:             return "NmiWindow";
+    case VmxExitReason::kTaskSwitch:            return "TaskSwitch";
+    case VmxExitReason::kCpuid:                 return "Cpuid";
+    case VmxExitReason::kGetSec:                return "GetSec";
+    case VmxExitReason::kHlt:                   return "Hlt";
+    case VmxExitReason::kInvd:                  return "Invd";
+    case VmxExitReason::kInvlpg:                return "Invlpg";
+    case VmxExitReason::kRdpmc:                 return "Rdpmc";
+    case VmxExitReason::kRdtsc:                 return "Rdtsc";
+    case VmxExitReason::kRsm:                   return "Rsm";
+    case VmxExitReason::kVmcall:                return "Vmcall";
+    case VmxExitReason::kVmclear:               return "Vmclear";
+    case VmxExitReason::kVmlaunch:              return "Vmlaunch";
+    case VmxExitReason::kVmptrld:               return "Vmptrld";
+    case VmxExitReason::kVmptrst:               return "Vmptrst";
+    case VmxExitReason::kVmread:                return "Vmread";
+    case VmxExitReason::kVmresume:              return "Vmresume";
+    case VmxExitReason::kVmwrite:               return "Vmwrite";
+    case VmxExitReason::kVmoff:                 return "Vmoff";
+    case VmxExitReason::kVmon:                  return "Vmon";
+    case VmxExitReason::kCrAccess:              return "CrAccess";
+    case VmxExitReason::kDrAccess:              return "DrAccess";
+    case VmxExitReason::kIoInstruction:         return "IoInstruction";
+    case VmxExitReason::kMsrRead:               return "MsrRead";
+    case VmxExitReason::kMsrWrite:              return "MsrWrite";
+    case VmxExitReason::kInvalidGuestState:     return "InvalidGuestState";
+    case VmxExitReason::kMsrLoading:            return "MsrLoading";
+    case VmxExitReason::kUndefined35:           return "Undefined35";
+    case VmxExitReason::kMwaitInstruction:      return "MwaitInstruction";
+    case VmxExitReason::kMonitorTrapFlag:       return "MonitorTrapFlag";
+    case VmxExitReason::kUndefined38:           return "Undefined38";
+    case VmxExitReason::kMonitorInstruction:    return "MonitorInstruction";
+    case VmxExitReason::kPauseInstruction:      return "PauseInstruction";
+    case VmxExitReason::kMachineCheck:          return "MachineCheck";
+    case VmxExitReason::kUndefined42:           return "Undefined42";
+    case VmxExitReason::kTprBelowThreshold:     return "TprBelowThreshold";
+    case VmxExitReason::kApicAccess:            return "ApicAccess";
+    case VmxExitReason::kVirtualizedEoi:        return "VirtualizedEoi";
+    case VmxExitReason::kGdtrOrIdtrAccess:      return "GdtrOrIdtrAccess";
+    case VmxExitReason::kLdtrOrTrAccess:        return "LdtrOrTrAccess";
+    case VmxExitReason::kEptViolation:          return "EptViolation";
+    case VmxExitReason::kEptMisconfig:          return "EptMisconfig";
+    case VmxExitReason::kInvept:                return "Invept";
+    case VmxExitReason::kRdtscp:                return "Rdtscp";
+    case VmxExitReason::kVmxPreemptionTime:     return "VmxPreemptionTime";
+    case VmxExitReason::kInvvpid:               return "Invvpid";
+    case VmxExitReason::kWbinvd:                return "Wbinvd";
+    case VmxExitReason::kXsetbv:                return "Xsetbv";
+    case VmxExitReason::kApicWrite:             return "ApicWrite";
+    case VmxExitReason::kRdrand:                return "Rdrand";
+    case VmxExitReason::kInvpcid:               return "Invpcid";
+    case VmxExitReason::kVmfunc:                return "Vmfunc";
+    case VmxExitReason::kUndefined60:           return "Undefined60";
+    case VmxExitReason::kRdseed:                return "Rdseed";
+    case VmxExitReason::kUndefined62:           return "Undefined62";
+    case VmxExitReason::kXsaves:                return "Xsaves";
+    case VmxExitReason::kXrstors:               return "Xrstors";
+    default:                                    return "UnknownExitReason";
+    }
+}
+
+#include "Zydis.h"
+
+#define HTV_FLAGS_RF              0x00010000  // bit 16
+#define HTV_FLAGS_VM              0x00020000  // bit 17
+#define HTV_FLAGS_RESERVED_BITS   0xFFC08028  // reserved bits in RFLAGS
+#define HTV_FLAGS_FIXED           0x00000002  // bit 1 must always be 1
+
+bool EmulateDecodedSyscallFast(GuestContext* guest_context, ULONG64 len)
+{
+    ULONG64 lstar = UtilReadMsr(Msr::kIa32Lstar);
+    ULONG64 star  = UtilReadMsr(Msr::kIa32Star);
+    ULONG64 fmask = UtilReadMsr(Msr::kIa32Fmask);
+
+    // RCX = next instruction
+    // RIP = LSTAR
+    guest_context->gp_regs->cx = guest_context->ip + len;
+    guest_context->ip = lstar;
+    UtilVmWrite(VmcsField::kGuestRip, (ULONG_PTR)guest_context->ip);
+
+    // R11 = RFLAGS
+    // RFLAGS &= ~(FMASK | RESUME_FLAG)
+    guest_context->gp_regs->r11 = guest_context->flag_reg.all;
+    guest_context->flag_reg.all &= ~(fmask | 0x00010000);
+    UtilVmWrite(VmcsField::kGuestRflags, (ULONG_PTR)guest_context->flag_reg.all);
+
+    // Update the loaded segments
+    //
+    VmxSegmentDescriptorAccessRight cs_ar = {
+        .fields = {
+            .type = 0xB,
+            .system = 1,
+            .dpl = 0,
+            .present = 1,
+            .reserved1 = 0,
+            .avl = 0,
+            .l = 1,
+            .db = 0,
+            .gran = 1,
+            .unusable = 0
+        }
+    };
+
+    VmxSegmentDescriptorAccessRight ss_ar = {
+        .fields = {
+            .type = 0x3,
+            .system = 1,
+            .dpl = 0,
+            .present = 1,
+            .reserved1 = 0,
+            .avl = 0,
+            .l = 0,
+            .db = 1,
+            .gran = 1,
+            .unusable = 0
+        }
+    };
+
+    UtilVmWrite(VmcsField::kGuestSsArBytes, ss_ar.all);
+    UtilVmWrite(VmcsField::kGuestSsBase, 0u);
+    UtilVmWrite(VmcsField::kGuestSsLimit, ~0u);
+    UtilVmWrite(VmcsField::kGuestSsSelector, ((star >> 32) & ~3) + 8);
+
+    UtilVmWrite(VmcsField::kGuestCsArBytes, cs_ar.all);
+    UtilVmWrite(VmcsField::kGuestCsBase, 0u);
+    UtilVmWrite(VmcsField::kGuestCsLimit, ~0u);
+    UtilVmWrite(VmcsField::kGuestCsSelector, (star >> 32) & ~3);
+
+    return true;
+}
+
+bool EmulateDecodedSyscall(GuestContext* guest_context, ZydisDecodedInstruction* instruction)
+{
+    if (instruction->attributes & ZYDIS_ATTRIB_HAS_LOCK) {
+        return false;
+    }
+
+    ULONG64 lstar = UtilReadMsr(Msr::kIa32Lstar);
+    ULONG64 star = UtilReadMsr(Msr::kIa32Star);
+    ULONG64 fmask = UtilReadMsr(Msr::kIa32Fmask);
+
+    // RCX = next instruction
+    // RIP = LSTAR
+    guest_context->gp_regs->cx = guest_context->ip + instruction->length;
+    guest_context->ip = lstar;
+    UtilVmWrite(VmcsField::kGuestRip, (ULONG_PTR)guest_context->ip);
+
+    // R11 = RFLAGS
+    // RFLAGS &= ~(FMASK | RESUME_FLAG)
+    guest_context->gp_regs->r11 = guest_context->flag_reg.all;
+    guest_context->flag_reg.all &= ~(fmask | 0x00010000);
+    UtilVmWrite(VmcsField::kGuestRflags, (ULONG_PTR)guest_context->flag_reg.all);
+
+    // Update the loaded segments
+    //
+    VmxSegmentDescriptorAccessRight cs_ar = {
+        .fields = {
+            .type = 0xB,
+            .system = 1,
+            .dpl = 0,
+            .present = 1,
+            .reserved1 = 0,
+            .avl = 0,
+            .l = 1,
+            .db = 0,
+            .gran = 1,
+            .unusable = 0
+        }
+    };
+
+    VmxSegmentDescriptorAccessRight ss_ar = {
+        .fields = {
+            .type = 0x3,
+            .system = 1,
+            .dpl = 0,
+            .present = 1,
+            .reserved1 = 0,
+            .avl = 0,
+            .l = 0,
+            .db = 1,
+            .gran = 1,
+            .unusable = 0
+        }
+    };
+
+    UtilVmWrite(VmcsField::kGuestSsArBytes, ss_ar.all);
+    UtilVmWrite(VmcsField::kGuestSsBase, 0u);
+    UtilVmWrite(VmcsField::kGuestSsLimit, ~0u);
+    UtilVmWrite(VmcsField::kGuestSsSelector, ((star >> 32) & ~3) + 8);
+
+    UtilVmWrite(VmcsField::kGuestCsArBytes, cs_ar.all);
+    UtilVmWrite(VmcsField::kGuestCsBase, 0u);
+    UtilVmWrite(VmcsField::kGuestCsLimit, ~0u);
+    UtilVmWrite(VmcsField::kGuestCsSelector, (star >> 32) & ~3);
+
+    return true;
+}
+
+bool EmulateSysret(GuestContext* guest_context)
+{
+    ULONG64 star = UtilReadMsr(Msr::kIa32Star);
+
+    guest_context->ip = guest_context->gp_regs->cx;
+    UtilVmWrite(VmcsField::kGuestRip, guest_context->ip);
+
+    // Load RFLAGS from R11. Clear RF, VM, reserved bits.
+    //
+    guest_context->flag_reg.all = (guest_context->gp_regs->r11 & ~(HTV_FLAGS_RF |
+        HTV_FLAGS_VM | HTV_FLAGS_RESERVED_BITS)) | HTV_FLAGS_FIXED;
+    UtilVmWrite(VmcsField::kGuestRflags, guest_context->flag_reg.all);
+
+    VmxSegmentDescriptorAccessRight cs_ar = {
+        .fields = {
+            .type = 0xB,
+            .system = 1,
+            .dpl = 3,
+            .present = 1,
+            .reserved1 = 0,
+            .avl = 0,
+            .l = 1,
+            .db = 0,
+            .gran = 1,
+            .unusable = 0
+        }
+    };
+
+    VmxSegmentDescriptorAccessRight ss_ar = {
+        .fields = {
+            .type = 0x3,
+            .system = 1,
+            .dpl = 3,
+            .present = 1,
+            .reserved1 = 0,
+            .avl = 0,
+            .l = 0,
+            .db = 1,
+            .gran = 1,
+            .unusable = 0
+        }
+    };
+
+    UtilVmWrite(VmcsField::kGuestSsArBytes, ss_ar.all);
+    UtilVmWrite(VmcsField::kGuestSsBase, 0u);
+    UtilVmWrite(VmcsField::kGuestSsLimit, ~0u);
+    UtilVmWrite(VmcsField::kGuestSsSelector, ((star >> 48) + 8) | 3);
+
+    UtilVmWrite(VmcsField::kGuestCsArBytes, cs_ar.all);
+    UtilVmWrite(VmcsField::kGuestCsBase, 0u);
+    UtilVmWrite(VmcsField::kGuestCsLimit, ~0u);
+    UtilVmWrite(VmcsField::kGuestCsSelector, ((star >> 48) + 16) | 3);
+
+    return true;
+}
+
+bool GetPtePresentBit(ULONG64 va) {
+    const VirtualAddress vaddr = { va };
+
+    const ULONG64 pml4_pa = __readcr3() & 0x000FFFFFFFFF000ULL;
+    const auto* pml4 = static_cast<Pml4Entry*>(UtilVaFromPa(pml4_pa));
+    const Pml4Entry& pml4e = pml4[vaddr.fields.pml4];
+    if (!pml4e.fields.present) return false;
+
+    const ULONG64 pdpt_pa = static_cast<ULONG64>(pml4e.fields.pfn) << PAGE_SHIFT;
+    const auto* pdpt = static_cast<PdpteEntry*>(UtilVaFromPa(pdpt_pa));
+    const PdpteEntry& pdpte = pdpt[vaddr.fields.pdpt];
+    if (!pdpte.fields.present) return false;
+    if (pdpte.fields.large_page) return true;  // 1 GB leaf, P=1 already checked
+
+    const ULONG64 pd_pa = static_cast<ULONG64>(pdpte.fields.pfn) << PAGE_SHIFT;
+    const auto* pd = static_cast<PdeEntry*>(UtilVaFromPa(pd_pa));
+    const PdeEntry& pde = pd[vaddr.fields.pd];
+    if (!pde.fields.present) return false;
+    if (pde.fields.large_page) return true;    // 2 MB leaf, P=1 already checked
+
+    const ULONG64 pt_pa = static_cast<ULONG64>(pde.fields.pfn) << PAGE_SHIFT;
+    const auto* pt = static_cast<PteEntry*>(UtilVaFromPa(pt_pa));
+    return static_cast<bool>(pt[vaddr.fields.pt].fields.present);
+}
+
+bool VmmpHandleUdDueToSyscallOrSysret(GuestContext* guest_context) {
+  // Syscall and sysret in windows should be always executed at maximum APC_LEVEL since:
+  // A syscall is coming from a user mode program
+  // A sysret is returing to a user mode program
+  // Thus the current thread can access pageable memory safely
+  if (guest_context->irql >= DISPATCH_LEVEL) {
+    return false;
+  }
+
+  if (VmmpGetGuestCpl() == 0) {
+    EmulateSysret(guest_context);
+  } else {
+    EmulateDecodedSyscallFast(guest_context, UtilVmRead(VmcsField::kVmExitInstructionLen));
+
+    // if the process is in the sandbox dispatch the thread to our handler
+    if (ProcessTracerIsProcessSandboxed()) {
+      UtilVmWrite(VmcsField::kGuestRip, (ULONG_PTR)AsmSyscallGateEntry);
+    }
+  }
+
+  return true;
+
+  /*
+  const auto len = static_cast<ULONG>(UtilVmRead(VmcsField::kVmExitInstructionLen));
+  UCHAR bytes[15] = {};
+
+  ULONG64 old_cr3 = __readcr3();
+  ULONG64 target_cr3 = *(ULONG64*)((char*)PsGetCurrentProcess() + 0x28);
+
+  // Switch into guest address space before describing its VA to the MDL
+  __writecr3(target_cr3);
+  HYPERPLATFORM_LOG_DEBUG("Presence fo %llXh: %x", guest_context->ip, GetPtePresentBit(guest_context->ip));
+  if (!GetPtePresentBit(guest_context->ip)) {
+    HYPERPLATFORM_LOG_DEBUG("injecting pf at %llXh", guest_context->ip);
+
+    PageFaultErrorCode fault_code = {};
+    fault_code.fields.present  = 0;  // non-present page
+    fault_code.fields.write    = 0;  // instruction fetch = read
+    fault_code.fields.user     = guest_context->ip > (ULONG64)MmHighestUserAddress;
+    fault_code.fields.reserved = 0;
+    fault_code.fields.fetch    = 1;  // instruction fetch
+
+    __writecr2(guest_context->ip);
+
+    VmmpInjectInterruption(
+      InterruptionType::kHardwareException,
+      InterruptionVector::kPageFaultException,
+      true,
+      fault_code.all
+    );
+
+    return true;
+  }
+
+  HYPERPLATFORM_LOG_DEBUG("readin' %llXh", guest_context->ip);
+  Cr4 cr4 = { __readcr4() };
+  cr4.fields.smap = false;
+  __writecr4(cr4.all);
+  _enable();
+  for (ULONG64 i = 0; i < len; i++) {
+    bytes[i] = ((char*)guest_context->ip)[i];
+  }
+  _disable();
+  cr4.fields.smap = true;
+  __writecr4(cr4.all);
+  __writecr3(old_cr3);
+
+  ZydisDecoder decoder = {};
+  ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+
+  ZydisDecodedInstruction instruction = {};
+  ZydisDecoderDecodeInstruction(&decoder, nullptr, bytes, len, &instruction);
+
+  switch (instruction.mnemonic) {
+    case ZYDIS_MNEMONIC_SYSCALL:
+      EmulateDecodedSyscall(guest_context, &instruction);
+      HYPERPLATFORM_LOG_DEBUG("Emulated #UD due to SYSCALL");
+    break;
+    case ZYDIS_MNEMONIC_SYSRET:
+      EmulateSysret(guest_context);
+      HYPERPLATFORM_LOG_DEBUG("Emulated #UD due to SYSRET");
+    break;
+    default:
+      HYPERPLATFORM_LOG_DEBUG("#UD due to unknown instruction");
+      return false;
+  }
+
+  return true;
+  */
+}
+
 // Interrupt
 _Use_decl_annotations_ static void VmmpHandleException(
     GuestContext *guest_context) {
@@ -391,9 +766,13 @@ _Use_decl_annotations_ static void VmmpHandleException(
       HYPERPLATFORM_LOG_INFO_SAFE("GuestIp= %016Ix, #GP Code= 0x%2x",
                                   guest_context->ip, error_code);
 
+    } else if (vector == InterruptionVector::kInvalidOpcodeException) {
+      if (!VmmpHandleUdDueToSyscallOrSysret(guest_context)) {
+        // If VmmpHandleUdDueToSyscallOrSysret returned false we reinject the exception
+        VmmpInjectInterruption(interruption_type, vector, true, 0);
+      }
     } else {
-      HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0,
-                                     0);
+      HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0, 0);
     }
 
   } else if (interruption_type == InterruptionType::kSoftwareException) {
@@ -407,14 +786,19 @@ _Use_decl_annotations_ static void VmmpHandleException(
       UtilVmWrite(VmcsField::kVmEntryInstructionLen, exit_inst_length);
 
     } else {
-      HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0,
-                                     0);
+      HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0, 0);
     }
   } else {
-    HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0,
-                                   0);
+    HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0, 0);
   }
 }
+
+#define HYPERV_CPUID_VENDOR_AND_MAX_FUNCTION 0x40000000
+#define HYPERV_CPUID_INTERFACE 0x40000001
+#define HYPERV_CPUID_VERSION 0x40000002
+#define HYPERV_CPUID_FEATURES 0x40000003
+#define HYPERV_CPUID_ENLIGHTMENT_INFO 0x40000004
+#define HYPERV_CPUID_IMPLEMENT_LIMITS 0x40000005
 
 // CPUID
 _Use_decl_annotations_ static void VmmpHandleCpuid(
@@ -423,24 +807,19 @@ _Use_decl_annotations_ static void VmmpHandleCpuid(
   unsigned int cpu_info[4] = {};
   const auto function_id = static_cast<int>(guest_context->gp_regs->ax);
   const auto sub_function_id = static_cast<int>(guest_context->gp_regs->cx);
-
   __cpuidex(reinterpret_cast<int *>(cpu_info), function_id, sub_function_id);
 
   if (function_id == 1) {
     // Present existence of a hypervisor using the HypervisorPresent bit
     CpuFeaturesEcx cpu_features = {static_cast<ULONG32>(cpu_info[2])};
-    cpu_features.fields.not_used = true;
+    cpu_features.fields.not_used = false;
     cpu_info[2] = static_cast<int>(cpu_features.all);
-  } else if (function_id == kHyperVCpuidInterface) {
-    // Leave signature of HyperPlatform onto EAX
-    cpu_info[0] = 'PpyH';
   }
 
   guest_context->gp_regs->ax = cpu_info[0];
   guest_context->gp_regs->bx = cpu_info[1];
   guest_context->gp_regs->cx = cpu_info[2];
   guest_context->gp_regs->dx = cpu_info[3];
-
   VmmpAdjustGuestInstructionPointer(guest_context);
 }
 
@@ -1389,9 +1768,10 @@ _Use_decl_annotations_ void __stdcall VmmVmxFailureHandler(
   const auto vmx_error = (all_regs->flags.fields.zf)
                              ? UtilVmRead(VmcsField::kVmInstructionError)
                              : 0;
-  HYPERPLATFORM_COMMON_BUG_CHECK(
-      HyperPlatformBugCheck::kCriticalVmxInstructionFailure, vmx_error,
-      guest_ip, 0);
+  HYPERPLATFORM_LOG_DEBUG_SAFE("VmmVmxFailureHandler called, ip: %llXh, error: %llXh", guest_ip,
+    vmx_error);
+  HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kCriticalVmxInstructionFailure, vmx_error,
+    guest_ip, 0);
 }
 
 // Indicates successful VMCALL
@@ -1472,7 +1852,7 @@ _Use_decl_annotations_ static void VmmpHandleVmCallTermination(
 
 // Returns guest's CPL
 /*_Use_decl_annotations_*/ static UCHAR VmmpGetGuestCpl() {
-  VmxRegmentDescriptorAccessRight ar = {
+  VmxSegmentDescriptorAccessRight ar = {
       static_cast<unsigned int>(UtilVmRead(VmcsField::kGuestSsArBytes))};
   return ar.fields.dpl;
 }

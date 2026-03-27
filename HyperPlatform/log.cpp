@@ -119,7 +119,7 @@ static NTSTATUS LogpMakePrefix(_In_ ULONG level,
 
 static const char *LogpFindBaseFunctionName(_In_z_ const char *function_name);
 
-static NTSTATUS LogpPut(_In_z_ char *message, _In_ ULONG attribute);
+/* static */ NTSTATUS LogpPut(_In_z_ char *message, _In_ ULONG attribute);
 
 _IRQL_requires_max_(PASSIVE_LEVEL) static NTSTATUS
     LogpFlushLogBuffer(_Inout_ LogBufferInfo *info);
@@ -511,7 +511,9 @@ _Use_decl_annotations_ NTSTATUS LogpPrint(ULONG level,
   // Write to serial first — safe at any IRQL.
   LogpSerialWriteString(message);
 
-  status = LogpPut(message, attribute);
+  // TODO: decomment the line below to re-enable file logging
+  // status = LogpPut(message, attribute);
+  attribute;
   if (!NT_SUCCESS(status)) {
     LogpDbgBreak();
   }
@@ -619,7 +621,7 @@ _Use_decl_annotations_ static const char *LogpFindBaseFunctionName(
 }
 
 // Logs the entry according to attribute and the thread condition.
-_Use_decl_annotations_ static NTSTATUS LogpPut(char *message, ULONG attribute) {
+_Use_decl_annotations_ /* static */ NTSTATUS LogpPut(char *message, ULONG attribute) {
   auto status = STATUS_SUCCESS;
 
   auto do_DbgPrint = ((attribute & kLogpLevelOptSafe) == 0 &&

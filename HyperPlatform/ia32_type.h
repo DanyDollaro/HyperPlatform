@@ -223,6 +223,101 @@ union Dr7 {
 };
 static_assert(sizeof(Dr7) == sizeof(void*), "Size check");
 
+/// See: IA-32e Paging — PML4 Entry
+union Pml4Entry {
+  ULONG64 all;
+  struct {
+    ULONG64 present        : 1;   //!< [0]    P — entry is valid
+    ULONG64 write          : 1;   //!< [1]    R/W
+    ULONG64 user           : 1;   //!< [2]    U/S
+    ULONG64 write_through  : 1;   //!< [3]    PWT
+    ULONG64 cache_disable  : 1;   //!< [4]    PCD
+    ULONG64 accessed       : 1;   //!< [5]    A
+    ULONG64 ignored0       : 1;   //!< [6]
+    ULONG64 reserved0      : 1;   //!< [7]    must be 0
+    ULONG64 ignored1       : 4;   //!< [8:11]
+    ULONG64 pfn            : 40;  //!< [12:51] PDPT physical page frame number
+    ULONG64 ignored2       : 11;  //!< [52:62]
+    ULONG64 xd             : 1;   //!< [63]   Execute-disable
+  } fields;
+};
+static_assert(sizeof(Pml4Entry) == 8, "Size check");
+
+/// See: IA-32e Paging — PDPT Entry (maps a 1 GB page when PS=1)
+union PdpteEntry {
+  ULONG64 all;
+  struct {
+    ULONG64 present        : 1;   //!< [0]    P
+    ULONG64 write          : 1;   //!< [1]    R/W
+    ULONG64 user           : 1;   //!< [2]    U/S
+    ULONG64 write_through  : 1;   //!< [3]    PWT
+    ULONG64 cache_disable  : 1;   //!< [4]    PCD
+    ULONG64 accessed       : 1;   //!< [5]    A
+    ULONG64 ignored0       : 1;   //!< [6]
+    ULONG64 large_page     : 1;   //!< [7]    PS — 1 = 1 GB huge page
+    ULONG64 ignored1       : 4;   //!< [8:11]
+    ULONG64 pfn            : 40;  //!< [12:51] PD (or 1 GB frame) PFN
+    ULONG64 ignored2       : 11;  //!< [52:62]
+    ULONG64 xd             : 1;   //!< [63]   Execute-disable
+  } fields;
+};
+static_assert(sizeof(PdpteEntry) == 8, "Size check");
+
+/// See: IA-32e Paging — PD Entry (maps a 2 MB page when PS=1)
+union PdeEntry {
+  ULONG64 all;
+  struct {
+    ULONG64 present        : 1;   //!< [0]    P
+    ULONG64 write          : 1;   //!< [1]    R/W
+    ULONG64 user           : 1;   //!< [2]    U/S
+    ULONG64 write_through  : 1;   //!< [3]    PWT
+    ULONG64 cache_disable  : 1;   //!< [4]    PCD
+    ULONG64 accessed       : 1;   //!< [5]    A
+    ULONG64 ignored0       : 1;   //!< [6]
+    ULONG64 large_page     : 1;   //!< [7]    PS — 1 = 2 MB large page
+    ULONG64 ignored1       : 4;   //!< [8:11]
+    ULONG64 pfn            : 40;  //!< [12:51] PT (or 2 MB frame) PFN
+    ULONG64 ignored2       : 11;  //!< [52:62]
+    ULONG64 xd             : 1;   //!< [63]   Execute-disable
+  } fields;
+};
+static_assert(sizeof(PdeEntry) == 8, "Size check");
+
+/// See: IA-32e Paging — PT Entry (always maps a 4 KB page)
+union PteEntry {
+  ULONG64 all;
+  struct {
+    ULONG64 present        : 1;   //!< [0]    P — page is present in RAM
+    ULONG64 write          : 1;   //!< [1]    R/W
+    ULONG64 user           : 1;   //!< [2]    U/S
+    ULONG64 write_through  : 1;   //!< [3]    PWT
+    ULONG64 cache_disable  : 1;   //!< [4]    PCD
+    ULONG64 accessed       : 1;   //!< [5]    A
+    ULONG64 dirty          : 1;   //!< [6]    D
+    ULONG64 pat            : 1;   //!< [7]    PAT
+    ULONG64 global         : 1;   //!< [8]    G
+    ULONG64 ignored0       : 3;   //!< [9:11]
+    ULONG64 pfn            : 40;  //!< [12:51] 4 KB physical page frame number
+    ULONG64 ignored1       : 11;  //!< [52:62]
+    ULONG64 xd             : 1;   //!< [63]   Execute-disable
+  } fields;
+};
+static_assert(sizeof(PteEntry) == 8, "Size check");
+
+/// Decomposed VA indices for a 4-level IA-32e page table walk
+union VirtualAddress {
+  ULONG64 all;
+  struct {
+    ULONG64 offset  : 12;  //!< [0:11]   byte offset within the 4 KB page
+    ULONG64 pt      : 9;   //!< [12:20]  PT index
+    ULONG64 pd      : 9;   //!< [21:29]  PD index
+    ULONG64 pdpt    : 9;   //!< [30:38]  PDPT index
+    ULONG64 pml4    : 9;   //!< [39:47]  PML4 index
+    ULONG64 sign    : 16;  //!< [48:63]  sign extension (canonical form)
+  } fields;
+};
+static_assert(sizeof(VirtualAddress) == 8, "Size check");
+
 /// See: MEMORY-MANAGEMENT REGISTERS
 #include <pshpack1.h>
 struct Idtr {
@@ -582,6 +677,21 @@ union Ia32ApicBaseMsr {
   } fields;
 };
 static_assert(sizeof(Ia32ApicBaseMsr) == 8, "Size check");
+
+/// See: IA32_EFER MSR (Extended Feature Enable Register)
+union Ia32EferMsr {
+  ULONG64 all;
+  struct {
+    ULONG64 syscall_enable : 1;        //!< [0] SCE - System Call Extensions
+    ULONG64 reserved1 : 7;            //!< [1:7]
+    ULONG64 long_mode_enable : 1;     //!< [8] LME - Long Mode Enable
+    ULONG64 reserved2 : 1;            //!< [9]
+    ULONG64 long_mode_active : 1;     //!< [10] LMA - Long Mode Active (read-only)
+    ULONG64 no_execute_enable : 1;    //!< [11] NXE - No-Execute Enable
+    ULONG64 reserved3 : 52;           //!< [12:63]
+  } fields;
+};
+static_assert(sizeof(Ia32EferMsr) == 8, "Size check");
 
 /// See: MODEL-SPECIFIC REGISTERS (MSRS)
 enum class Msr : unsigned int {
@@ -1107,7 +1217,7 @@ union VmxVmEntryControls {
 static_assert(sizeof(VmxVmExitControls) == 4, "Size check");
 
 /// See: Guest Register State
-union VmxRegmentDescriptorAccessRight {
+union VmxSegmentDescriptorAccessRight {
   unsigned int all;
   struct {
     unsigned type : 4;        //!< [0:3]
@@ -1123,7 +1233,7 @@ union VmxRegmentDescriptorAccessRight {
     unsigned reserved2 : 15;  //!< [17:31]
   } fields;
 };
-static_assert(sizeof(VmxRegmentDescriptorAccessRight) == 4, "Size check");
+static_assert(sizeof(VmxSegmentDescriptorAccessRight) == 4, "Size check");
 
 /// See: ARCHITECTURAL MSRS
 union Ia32FeatureControlMsr {

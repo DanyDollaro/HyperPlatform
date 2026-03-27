@@ -165,6 +165,19 @@ _Use_decl_annotations_ NTSTATUS VmInitialization() {
     UtilForEachProcessor(VmpStopVm, nullptr);
     return status;
   }
+
+  /*
+  GROUP_AFFINITY affinity = {};
+  affinity.Group = 0;
+  affinity.Mask = 1;
+  GROUP_AFFINITY previous_affinity = {};
+  KeSetSystemGroupAffinityThread(&affinity, &previous_affinity);
+
+  // Execute callback
+  NTSTATUS status = VmpStartVm(shared_data);
+
+  KeRevertToUserGroupAffinityThread(&previous_affinity);
+  */
   return status;
 }
 
@@ -216,10 +229,11 @@ _Use_decl_annotations_ static bool VmpIsVmxAvailable() {
 // Sets 1 to the lock bit of the IA32_FEATURE_CONTROL MSR
 _Use_decl_annotations_ static NTSTATUS VmpSetLockBitCallback(void *context) {
   UNREFERENCED_PARAMETER(context);
-  PAGED_CODE()
+  PAGED_CODE();
 
   Ia32FeatureControlMsr vmx_feature_control = {
       UtilReadMsr64(Msr::kIa32FeatureControl)};
+
   if (vmx_feature_control.fields.lock) {
     return STATUS_SUCCESS;
   }
@@ -345,7 +359,7 @@ _Use_decl_annotations_ static NTSTATUS VmpStartVm(void *context) {
   HYPERPLATFORM_LOG_INFO("Initializing VMX for the processor %lu.",
                          KeGetCurrentProcessorNumberEx(nullptr));
   const auto ok = AsmInitializeVm(VmpInitializeVm, context);
-  NT_ASSERT(VmpIsHyperPlatformInstalled() == ok);
+  // NT_ASSERT(VmpIsHyperPlatformInstalled() == ok);
   if (!ok) {
     return STATUS_UNSUCCESSFUL;
   }
@@ -360,14 +374,14 @@ _Use_decl_annotations_ static void VmpInitializeVm(
     void *context) {
   PAGED_CODE()
 
-  const auto shared_data = static_cast<SharedProcessorData *>(context);
+  const auto shared_data = static_cast<SharedProcessorData*>(context);
   if (!shared_data) {
     HYPERPLATFORM_LOG_DEBUG("shared_data was null");
     return;
   }
 
   // Allocate related structures
-  const auto processor_data = static_cast<ProcessorData *>(ExAllocatePoolZero(
+  const auto processor_data = static_cast<ProcessorData*>(ExAllocatePoolZero(
       NonPagedPool, sizeof(ProcessorData), kHyperPlatformCommonPoolTag));
   if (!processor_data) {
     HYPERPLATFORM_LOG_DEBUG("failed to allocate processor_data");
@@ -397,7 +411,7 @@ _Use_decl_annotations_ static void VmpInitializeVm(
   RtlZeroMemory(processor_data->vmm_stack_limit, KERNEL_STACK_SIZE);
 
   processor_data->vmcs_region =
-      static_cast<VmControlStructure *>(ExAllocatePoolZero(
+      static_cast<VmControlStructure*>(ExAllocatePoolZero(
           NonPagedPool, kVmxMaxVmcsSize, kHyperPlatformCommonPoolTag));
   if (!processor_data->vmcs_region) {
     HYPERPLATFORM_LOG_DEBUG("vmcs allocation failed");
@@ -407,7 +421,7 @@ _Use_decl_annotations_ static void VmpInitializeVm(
   RtlZeroMemory(processor_data->vmcs_region, kVmxMaxVmcsSize);
 
   processor_data->vmxon_region =
-      static_cast<VmControlStructure *>(ExAllocatePoolZero(
+      static_cast<VmControlStructure*>(ExAllocatePoolZero(
           NonPagedPool, kVmxMaxVmcsSize, kHyperPlatformCommonPoolTag));
   if (!processor_data->vmxon_region) {
     HYPERPLATFORM_LOG_DEBUG("vmxon region failed allocation");
@@ -415,6 +429,15 @@ _Use_decl_annotations_ static void VmpInitializeVm(
     return;
   }
   RtlZeroMemory(processor_data->vmxon_region, kVmxMaxVmcsSize);
+
+  processor_data->vmm_ud_exception_stack_limit =
+    static_cast<VmControlStructure*>(ExAllocatePoolZero(
+          NonPagedPool, kVmxMaxVmcsSize, kHyperPlatformCommonPoolTag));
+  if (!processor_data->vmm_ud_exception_stack_limit) {
+    HYPERPLATFORM_LOG_DEBUG("ud exception stack allocation failed");
+    VmpFreeProcessorData(processor_data);
+    return;
+  }
 
   // Initialize stack memory for VMM looks like this:
   //
@@ -600,7 +623,7 @@ _Use_decl_annotations_ static bool VmpInitializeVmcs(
 
 // See: PREPARATION AND LAUNCHING A VIRTUAL MACHINE
 _Use_decl_annotations_ static bool VmpSetupVmcs(
-    const ProcessorData *processor_data, ULONG_PTR guest_stack_pointer,
+    const ProcessorData* processor_data, ULONG_PTR guest_stack_pointer,
     ULONG_PTR guest_instruction_pointer, ULONG_PTR vmm_stack_pointer) {
   PAGED_CODE()
 
@@ -617,12 +640,15 @@ _Use_decl_annotations_ static bool VmpSetupVmcs(
   VmxVmEntryControls vm_entryctl_requested = {};
   vm_entryctl_requested.fields.load_debug_controls = true;
   vm_entryctl_requested.fields.ia32e_mode_guest = IsX64();
+  vm_entryctl_requested.fields.load_ia32_efer = true;
   VmxVmEntryControls vm_entryctl = {VmpAdjustControlValue(
       (use_true_msrs) ? Msr::kIa32VmxTrueEntryCtls : Msr::kIa32VmxEntryCtls,
       vm_entryctl_requested.all)};
 
   VmxVmExitControls vm_exitctl_requested = {};
   vm_exitctl_requested.fields.host_address_space_size = IsX64();
+  vm_exitctl_requested.fields.load_ia32_efer = true;
+  vm_exitctl_requested.fields.save_ia32_efer = true;
   VmxVmExitControls vm_exitctl = {VmpAdjustControlValue(
       (use_true_msrs) ? Msr::kIa32VmxTrueExitCtls : Msr::kIa32VmxExitCtls,
       vm_exitctl_requested.all)};
@@ -667,10 +693,7 @@ _Use_decl_annotations_ static bool VmpSetupVmcs(
 
   // NOTE: Comment in any of those as needed
   const auto exception_bitmap =
-      // 1 << InterruptionVector::kBreakpointException |
-      // 1 << InterruptionVector::kGeneralProtectionException |
-      // 1 << InterruptionVector::kPageFaultException |
-      0;
+      1 << InterruptionVector::kInvalidOpcodeException;
 
   // Set up CR0 and CR4 bitmaps
   // - Where a bit is     masked, the shadow bit appears
@@ -702,6 +725,12 @@ _Use_decl_annotations_ static bool VmpSetupVmcs(
 
   // clang-format off
   auto error = VmxStatus::kOk;
+
+  // Setting the efer
+  Ia32EferMsr efer = { UtilReadMsr(Msr::kIa32Efer) };
+  error |= UtilVmWrite(VmcsField::kHostIa32Efer, efer.all);
+  efer.fields.syscall_enable = false;
+  error |= UtilVmWrite(VmcsField::kGuestIa32Efer, efer.all);
 
   /* 16-Bit Control Field */
   // error |= UtilVmWrite(VmcsField::kVirtualProcessorId, KeGetCurrentProcessorNumberEx(nullptr) + 1);
@@ -856,7 +885,7 @@ _Use_decl_annotations_ static ULONG VmpGetSegmentAccessRight(
     USHORT segment_selector) {
   PAGED_CODE()
 
-  VmxRegmentDescriptorAccessRight access_right = {};
+  VmxSegmentDescriptorAccessRight access_right = {};
   if (segment_selector) {
     const SegmentSelector ss = {segment_selector};
     auto native_access_right = AsmLoadAccessRightsByte(ss.all);
@@ -983,7 +1012,7 @@ _Use_decl_annotations_ static NTSTATUS VmpStopVm(void *context) {
 // Frees all related memory
 _Use_decl_annotations_ static void VmpFreeProcessorData(
     ProcessorData *processor_data) {
-  PAGED_CODE()
+  PAGED_CODE();
 
   if (!processor_data) {
     return;
@@ -1000,6 +1029,10 @@ _Use_decl_annotations_ static void VmpFreeProcessorData(
   }
   if (processor_data->ept_data) {
     EptTermination(processor_data->ept_data);
+  }
+  if (processor_data->vmm_ud_exception_stack_limit) {
+    ExFreePoolWithTag(processor_data->vmm_ud_exception_stack_limit,
+                      kHyperPlatformCommonPoolTag);
   }
 
   VmpFreeSharedData(processor_data);
